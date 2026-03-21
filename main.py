@@ -1,6 +1,6 @@
 """
-AffanMarvel Auto-Poster
-=======================
+AffanMarvel Auto-Poster — FIXED VERSION
+========================================
 Flow 1 : RSS Feeds       — 5 articles per site
 Flow 2 : Google News RSS — 5 articles per topic
 Flow 3 : Web Scraping    — 5 articles per scrape target
@@ -18,7 +18,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. CONFIG  (values come from GitHub Secrets — never hardcode here)
+# 1. CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
@@ -27,11 +27,11 @@ WP_USERNAME     = os.environ.get("WP_USERNAME", "")
 WP_APP_PASSWORD = os.environ.get("WP_APP_PASSWORD", "")
 
 POSTED_FILE          = "posted_urls.txt"
-ARTICLES_PER_SOURCE  = 5    # How many articles to pull from each source
-MAX_TO_REWRITE       = 5   # Max articles sent to Gemini per run (free limit safe)
+ARTICLES_PER_SOURCE  = 5
+MAX_TO_REWRITE       = 5
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. FLOW 1 — RSS FEEDS  (10 sites × 5 = 50 raw articles)
+# 2. FLOW 1 — RSS FEEDS
 # ─────────────────────────────────────────────────────────────────────────────
 
 RSS_FEEDS = [
@@ -48,7 +48,7 @@ RSS_FEEDS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. FLOW 2 — GOOGLE NEWS RSS  (5 topics × 5 = 25 raw articles)
+# 3. FLOW 2 — GOOGLE NEWS RSS
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_NEWS_TOPICS = [
@@ -60,21 +60,19 @@ GOOGLE_NEWS_TOPICS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. FLOW 3 — SCRAPE TARGETS  (2 sites × 5 = 10 raw articles)
+# 4. FLOW 3 — SCRAPE TARGETS
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRAPE_TARGETS = [
     {
-        "url":         "https://www.cbr.com/category/marvel/",
-        "source":      "CBR-Scrape",
-        "item_sel":    "article h2 a",   # CSS selector for article links
-        "title_sel":   "h2",
+        "url":      "https://www.cbr.com/tag/marvel/",
+        "source":   "CBR-Marvel-Scrape",
+        "item_sel": "article h2 a",
     },
     {
-        "url":         "https://www.cbr.com/category/anime/",
-        "source":      "CBR-Anime-Scrape",
-        "item_sel":    "article h2 a",
-        "title_sel":   "h2",
+        "url":      "https://www.cbr.com/tag/anime/",
+        "source":   "CBR-Anime-Scrape",
+        "item_sel": "article h2 a",
     },
 ]
 
@@ -87,7 +85,7 @@ SCRAPE_HEADERS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. KEYWORD → CATEGORY DETECTION
+# 5. CATEGORY DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
 CATEGORY_KEYWORDS = {
@@ -107,7 +105,6 @@ CATEGORY_KEYWORDS = {
 }
 
 def detect_category(title, summary=""):
-    """Detect the best WordPress category from title + summary keywords."""
     text = (title + " " + summary).lower()
     scores = {cat: 0 for cat in CATEGORY_KEYWORDS}
     for cat, keywords in CATEGORY_KEYWORDS.items():
@@ -118,64 +115,35 @@ def detect_category(title, summary=""):
     return best if scores[best] > 0 else "Pop Culture"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. DEDUPLICATION HELPERS
+# 6. DEDUPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_posted_urls():
-    """Load already-posted URLs from file. Returns a set."""
     if not os.path.exists(POSTED_FILE):
         return set()
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip() and not line.startswith("#"))
 
 def save_posted_url(url):
-    """Append a URL to the posted-tracker file."""
     with open(POSTED_FILE, "a", encoding="utf-8") as f:
         f.write(url.strip() + "\n")
-    # Keep file trim — keep only last 1000 entries
-    try:
-        with open(POSTED_FILE, "r", encoding="utf-8") as f:
-            lines = [l for l in f.readlines() if l.strip() and not l.startswith("#")]
-        if len(lines) > 1000:
-            with open(POSTED_FILE, "w", encoding="utf-8") as f:
-                f.write("# AffanMarvel posted URL tracker\n")
-                f.writelines(lines[-1000:])
-    except Exception:
-        pass
 
 def titles_are_similar(t1, t2, threshold=0.72):
-    """Return True if two titles are too similar (likely the same story)."""
     ratio = difflib.SequenceMatcher(None, t1.lower(), t2.lower()).ratio()
     return ratio >= threshold
 
 def deduplicate_articles(articles, posted_urls):
-    """
-    Remove:
-      1. Articles whose URL was already posted.
-      2. Articles with titles very similar to another article in THIS batch.
-    """
     seen_titles = []
     unique = []
-
     for art in articles:
         url   = art.get("url", "").strip()
         title = art.get("title", "").strip()
-
-        # Skip if URL already posted before
         if url in posted_urls:
             continue
-
-        # Skip if title is too similar to one already in this batch
-        is_dup = False
-        for seen_t in seen_titles:
-            if titles_are_similar(title, seen_t):
-                is_dup = True
-                break
-
+        is_dup = any(titles_are_similar(title, t) for t in seen_titles)
         if not is_dup:
             unique.append(art)
             seen_titles.append(title)
-
     return unique
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,30 +151,23 @@ def deduplicate_articles(articles, posted_urls):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_rss_articles():
-    """Fetch up to ARTICLES_PER_SOURCE articles from each RSS feed."""
     articles = []
     for feed_info in RSS_FEEDS:
         source = feed_info["source"]
-        url    = feed_info["url"]
         try:
             print(f"  [RSS] {source} ...")
-            feed = feedparser.parse(url)
+            feed  = feedparser.parse(feed_info["url"])
             count = 0
             for entry in feed.entries:
                 if count >= ARTICLES_PER_SOURCE:
                     break
                 link    = entry.get("link", "").strip()
                 title   = entry.get("title", "").strip()
-                summary = entry.get("summary", entry.get("description", "")).strip()
-                # Strip HTML tags from summary
-                summary = re.sub(r"<[^>]+>", "", summary).strip()
+                summary = re.sub(r"<[^>]+>", "", entry.get("summary", entry.get("description", ""))).strip()
                 if link and title:
                     articles.append({
-                        "url":      link,
-                        "title":    title,
-                        "summary":  summary[:600],
-                        "source":   source,
-                        "flow":     "RSS",
+                        "url": link, "title": title,
+                        "summary": summary[:600], "source": source, "flow": "RSS",
                     })
                     count += 1
             print(f"     → {count} articles")
@@ -215,11 +176,10 @@ def fetch_rss_articles():
     return articles
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. FLOW 2 — GOOGLE NEWS RSS
+# 8. FLOW 2 — GOOGLE NEWS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_google_news_articles():
-    """Fetch top articles from Google News RSS for each topic."""
     articles = []
     for topic in GOOGLE_NEWS_TOPICS:
         try:
@@ -232,16 +192,12 @@ def fetch_google_news_articles():
                 if count >= ARTICLES_PER_SOURCE:
                     break
                 link  = entry.get("link", "").strip()
-                title = entry.get("title", "").strip()
-                # Google News titles sometimes include source at end " - Source"
-                title = re.sub(r"\s*-\s*[^-]+$", "", title).strip()
+                title = re.sub(r"\s*-\s*[^-]+$", "", entry.get("title", "")).strip()
                 if link and title:
                     articles.append({
-                        "url":      link,
-                        "title":    title,
-                        "summary":  entry.get("summary", "").strip()[:600],
-                        "source":   f"GoogleNews-{topic[:20]}",
-                        "flow":     "GoogleNews",
+                        "url": link, "title": title,
+                        "summary": entry.get("summary", "").strip()[:600],
+                        "source": f"GoogleNews", "flow": "GoogleNews",
                     })
                     count += 1
             print(f"     → {count} articles")
@@ -250,17 +206,16 @@ def fetch_google_news_articles():
     return articles
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. FLOW 3 — WEB SCRAPING
+# 9. FLOW 3 — SCRAPING
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_scraped_articles():
-    """Scrape article links from target pages."""
     articles = []
     for target in SCRAPE_TARGETS:
         source = target["source"]
         try:
             print(f"  [Scrape] {source} ...")
-            resp = requests.get(target["url"], headers=SCRAPE_HEADERS, timeout=15)
+            resp  = requests.get(target["url"], headers=SCRAPE_HEADERS, timeout=15)
             resp.raise_for_status()
             soup  = BeautifulSoup(resp.text, "html.parser")
             links = soup.select(target["item_sel"])
@@ -272,17 +227,13 @@ def fetch_scraped_articles():
                 title = tag.get_text(strip=True)
                 if not href or not title:
                     continue
-                # Make absolute URL
                 if href.startswith("/"):
                     base = "/".join(target["url"].split("/")[:3])
                     href = base + href
                 if href.startswith("http") and len(title) > 10:
                     articles.append({
-                        "url":      href,
-                        "title":    title,
-                        "summary":  "",
-                        "source":   source,
-                        "flow":     "Scrape",
+                        "url": href, "title": title,
+                        "summary": "", "source": source, "flow": "Scrape",
                     })
                     count += 1
             print(f"     → {count} articles")
@@ -291,16 +242,12 @@ def fetch_scraped_articles():
     return articles
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. GEMINI REWRITE
+# 10. GEMINI REWRITE — WITH RETRY ON 429
 # ─────────────────────────────────────────────────────────────────────────────
 
 def rewrite_with_gemini(title, summary, category, source):
-    """
-    Send article info to Gemini 1.5 Flash (free) for rewriting.
-    Returns a dict with title, content, tags, excerpt  — or None on failure.
-    """
     if not GEMINI_API_KEY:
-        print("  ⚠ GEMINI_API_KEY not set — skipping rewrite")
+        print("  ⚠ GEMINI_API_KEY not set")
         return None
 
     prompt = f"""You are a pop culture news writer for AffanMarvel — a site covering Marvel, DC, Anime, and Movies.
@@ -309,87 +256,96 @@ Write a NEWS BLOG POST based on this article info:
 
 Original Title : {title}
 Category       : {category}
-Source Summary : {summary if summary else "No summary available — write from the title alone."}
+Source Summary : {summary if summary else "Write from the title alone."}
 
 STRICT RULES:
-1. Write a new, catchy title — do NOT copy the original.
+1. Write a new catchy title — do NOT copy the original.
 2. Write EXACTLY 3 short paragraphs:
    - Paragraph 1: What happened / the main news.
-   - Paragraph 2: Why it matters / fan reaction / background context.
-   - Paragraph 3: What to expect next / closing thought.
-3. Total content: 200–280 words only. No padding.
-4. Do NOT mention the source website name ({source}).
-5. End paragraph 3 with one engaging question for readers.
-6. Wrap each paragraph in <p> HTML tags.
+   - Paragraph 2: Why it matters / fan reaction / background.
+   - Paragraph 3: What to expect next / closing thought + one question for readers.
+3. Total: 200-280 words only.
+4. Do NOT mention the source website name.
+5. Wrap each paragraph in <p> HTML tags.
 
-Return ONLY valid JSON (no markdown, no backticks, no extra text):
+Return ONLY valid JSON (no markdown, no backticks):
 {{
   "title": "Your new catchy title here",
-  "content": "<p>Paragraph 1 here.</p><p>Paragraph 2 here.</p><p>Paragraph 3 here.</p>",
-  "excerpt": "One sentence summary of the post (max 25 words).",
+  "content": "<p>Para 1</p><p>Para 2</p><p>Para 3</p>",
+  "excerpt": "One sentence summary (max 25 words).",
   "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
 }}"""
 
     api_url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature":     0.75,
+            "temperature": 0.75,
             "maxOutputTokens": 1024,
-            "topP":            0.9,
+            "topP": 0.9,
         },
     }
 
-    try:
-        resp = requests.post(api_url, json=payload, timeout=40)
-        resp.raise_for_status()
-        raw  = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        # Strip markdown fences if Gemini adds them
-        raw  = re.sub(r"```json\s*|```", "", raw).strip()
-        data = json.loads(raw)
+    # Retry up to 3 times on rate limit
+    for attempt in range(3):
+        try:
+            resp = requests.post(api_url, json=payload, timeout=40)
 
-        # Validate required keys
-        for key in ("title", "content", "excerpt", "tags"):
-            if key not in data:
-                raise ValueError(f"Missing key '{key}' in Gemini response")
+            if resp.status_code == 429:
+                wait_time = 60 * (attempt + 1)
+                print(f"  ⏳ Rate limited (429) — waiting {wait_time}s then retrying... (attempt {attempt+1}/3)")
+                time.sleep(wait_time)
+                continue
 
-        return data
+            resp.raise_for_status()
+            raw  = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            raw  = re.sub(r"```json\s*|```", "", raw).strip()
+            data = json.loads(raw)
 
-    except json.JSONDecodeError as e:
-        print(f"  ⚠ Gemini JSON parse error: {e}")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"  ⚠ Gemini API request error: {e}")
-        return None
-    except Exception as e:
-        print(f"  ⚠ Gemini unexpected error: {e}")
-        return None
+            for key in ("title", "content", "excerpt", "tags"):
+                if key not in data:
+                    raise ValueError(f"Missing key '{key}' in Gemini response")
+
+            return data
+
+        except json.JSONDecodeError as e:
+            print(f"  ⚠ Gemini JSON parse error: {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            if attempt < 2:
+                print(f"  ⚠ Request error (attempt {attempt+1}): {e} — retrying in 30s...")
+                time.sleep(30)
+                continue
+            print(f"  ⚠ Gemini request failed after 3 attempts: {e}")
+            return None
+        except Exception as e:
+            print(f"  ⚠ Unexpected error: {e}")
+            return None
+
+    return None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. WORDPRESS — GET CATEGORY ID BY NAME
+# 11. WORDPRESS — GET CATEGORY ID
 # ─────────────────────────────────────────────────────────────────────────────
 
-_category_id_cache = {}   # Avoid repeated API calls for same category name
+_category_id_cache = {}
 
 def get_wp_category_id(category_name):
-    """Query WordPress REST API to get a category ID by name. Returns 1 (uncategorized) on failure."""
     if category_name in _category_id_cache:
         return _category_id_cache[category_name]
-
     try:
         resp = requests.get(
             f"{WP_URL}/wp-json/wp/v2/categories",
             params={"search": category_name, "per_page": 5},
             auth=(WP_USERNAME, WP_APP_PASSWORD),
-            timeout=10,
+            timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
-        if isinstance(data, list) and len(data) > 0:
-            # Find exact name match first, else take first result
+        if isinstance(data, list) and data:
             for cat in data:
                 if cat.get("name", "").lower() == category_name.lower():
                     _category_id_cache[category_name] = cat["id"]
@@ -398,8 +354,7 @@ def get_wp_category_id(category_name):
             return data[0]["id"]
     except Exception as e:
         print(f"  ⚠ Could not get category ID for '{category_name}': {e}")
-
-    _category_id_cache[category_name] = 1  # fallback = uncategorized
+    _category_id_cache[category_name] = 1
     return 1
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -407,14 +362,12 @@ def get_wp_category_id(category_name):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_or_create_tag_ids(tag_names):
-    """Return a list of WordPress tag IDs, creating tags that don't exist."""
     tag_ids = []
     for name in tag_names:
         name = name.strip()
         if not name:
             continue
         try:
-            # Search first
             r = requests.get(
                 f"{WP_URL}/wp-json/wp/v2/tags",
                 params={"search": name, "per_page": 5},
@@ -431,7 +384,6 @@ def get_or_create_tag_ids(tag_names):
             if matched:
                 tag_ids.append(matched)
             else:
-                # Create new tag
                 c = requests.post(
                     f"{WP_URL}/wp-json/wp/v2/tags",
                     json={"name": name},
@@ -449,10 +401,6 @@ def get_or_create_tag_ids(tag_names):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def post_to_wordpress_draft(title, content, excerpt, category, tags, source_url):
-    """
-    Create a DRAFT post in WordPress.
-    Returns the WordPress post URL on success, None on failure.
-    """
     cat_id  = get_wp_category_id(category)
     tag_ids = get_or_create_tag_ids(tags)
 
@@ -460,12 +408,9 @@ def post_to_wordpress_draft(title, content, excerpt, category, tags, source_url)
         "title":      title,
         "content":    content,
         "excerpt":    excerpt,
-        "status":     "draft",          # ← DRAFT, not published
+        "status":     "draft",
         "categories": [cat_id],
         "tags":       tag_ids,
-        "meta": {
-            "source_url": source_url,   # Store original URL for reference
-        },
     }
 
     try:
@@ -477,11 +422,10 @@ def post_to_wordpress_draft(title, content, excerpt, category, tags, source_url)
         )
         if resp.status_code == 201:
             post = resp.json()
-            link = post.get("link", "")
-            print(f"  ✓ Draft created → ID {post.get('id')} | {link}")
-            return link
+            print(f"  ✓ Draft created → ID {post.get('id')} | {post.get('link','')}")
+            return post.get("link", "success")
         else:
-            print(f"  ✗ WordPress error {resp.status_code}: {resp.text[:200]}")
+            print(f"  ✗ WordPress error {resp.status_code}: {resp.text[:300]}")
             return None
     except Exception as e:
         print(f"  ✗ WordPress request error: {e}")
@@ -492,65 +436,53 @@ def post_to_wordpress_draft(title, content, excerpt, category, tags, source_url)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def validate_config():
-    """Check that all required environment variables are set."""
     missing = []
-    if not GEMINI_API_KEY:
-        missing.append("GEMINI_API_KEY")
-    if not WP_URL:
-        missing.append("WP_URL")
-    if not WP_USERNAME:
-        missing.append("WP_USERNAME")
-    if not WP_APP_PASSWORD:
-        missing.append("WP_APP_PASSWORD")
+    if not GEMINI_API_KEY:  missing.append("GEMINI_API_KEY")
+    if not WP_URL:          missing.append("WP_URL")
+    if not WP_USERNAME:     missing.append("WP_USERNAME")
+    if not WP_APP_PASSWORD: missing.append("WP_APP_PASSWORD")
     if missing:
-        raise EnvironmentError(
-            f"Missing required environment variables: {', '.join(missing)}\n"
-            "Add them as GitHub Secrets in your repository settings."
-        )
+        raise EnvironmentError(f"Missing environment variables: {', '.join(missing)}")
 
 def main():
     print("\n" + "=" * 60)
     print(f"  AffanMarvel Auto-Poster — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # Step 0: Validate config
     validate_config()
     posted_urls = load_posted_urls()
     print(f"\n📋 Already posted: {len(posted_urls)} URLs tracked\n")
 
-    # ── COLLECT from all 3 flows ──────────────────────────────────────────
+    # Collect
     all_raw = []
 
     print("━━━ FLOW 1: RSS FEEDS ━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    rss_articles = fetch_rss_articles()
-    print(f"  Subtotal: {len(rss_articles)} articles from RSS\n")
-    all_raw.extend(rss_articles)
+    rss = fetch_rss_articles()
+    print(f"  Subtotal: {len(rss)} articles from RSS\n")
+    all_raw.extend(rss)
 
     print("━━━ FLOW 2: GOOGLE NEWS ━━━━━━━━━━━━━━━━━━━━━━━━━")
-    gn_articles = fetch_google_news_articles()
-    print(f"  Subtotal: {len(gn_articles)} articles from Google News\n")
-    all_raw.extend(gn_articles)
+    gn = fetch_google_news_articles()
+    print(f"  Subtotal: {len(gn)} articles from Google News\n")
+    all_raw.extend(gn)
 
     print("━━━ FLOW 3: WEB SCRAPING ━━━━━━━━━━━━━━━━━━━━━━━━")
-    sc_articles = fetch_scraped_articles()
-    print(f"  Subtotal: {len(sc_articles)} articles from Scraping\n")
-    all_raw.extend(sc_articles)
+    sc = fetch_scraped_articles()
+    print(f"  Subtotal: {len(sc)} articles from Scraping\n")
+    all_raw.extend(sc)
 
     print(f"📦 Total raw collected : {len(all_raw)}")
 
-    # ── DEDUPLICATE ───────────────────────────────────────────────────────
     unique = deduplicate_articles(all_raw, posted_urls)
     print(f"✅ After deduplication : {len(unique)} unique articles")
 
     if not unique:
-        print("\n😴 No new articles found. All caught up! Exiting.\n")
+        print("\n😴 No new articles found. Exiting.\n")
         return
 
-    # Limit to MAX_TO_REWRITE to stay within Gemini free tier
     to_process = unique[:MAX_TO_REWRITE]
     print(f"🚀 Processing         : {len(to_process)} articles this run\n")
 
-    # ── REWRITE + DRAFT ───────────────────────────────────────────────────
     success_count = 0
     fail_count    = 0
 
@@ -558,13 +490,10 @@ def main():
         print(f"─── Article {i}/{len(to_process)} ─────────────────────────────")
         print(f"  Title  : {article['title'][:80]}")
         print(f"  Source : {article['source']} [{article['flow']}]")
-        print(f"  URL    : {article['url'][:80]}")
 
-        # Detect category
         category = detect_category(article["title"], article.get("summary", ""))
-        print(f"  Category detected: {category}")
+        print(f"  Category: {category}")
 
-        # Rewrite with Gemini
         print("  ✍  Rewriting with Gemini...")
         rewritten = rewrite_with_gemini(
             title    = article["title"],
@@ -574,15 +503,14 @@ def main():
         )
 
         if rewritten is None:
-            print("  ✗ Gemini rewrite failed — skipping this article")
+            print("  ✗ Skipping — Gemini failed")
             fail_count += 1
-            time.sleep(3)
+            time.sleep(15)
             continue
 
         print(f"  New title: {rewritten['title'][:70]}")
-
-        # Post as WordPress DRAFT
         print("  📤 Posting to WordPress as DRAFT...")
+
         result = post_to_wordpress_draft(
             title      = rewritten["title"],
             content    = rewritten["content"],
@@ -598,12 +526,10 @@ def main():
         else:
             fail_count += 1
 
-        # Delay between Gemini calls to respect free tier rate limits
         if i < len(to_process):
-            print("  ⏳ Waiting 15 before next article...")
-            time.sleep(15)
+            print("  ⏳ Waiting 20s before next article...")
+            time.sleep(20)
 
-    # ── SUMMARY ───────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print(f"  ✅ Run complete!")
     print(f"  Published as draft : {success_count}")
