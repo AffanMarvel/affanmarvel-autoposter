@@ -1,8 +1,9 @@
 """
-AffanMarvel Auto-Poster — SAVE TO JSON VERSION
-================================================
-Saves rewritten articles to articles.json in the repo.
-WordPress plugin then pulls and imports them as drafts.
+AffanMarvel Auto-Poster — GROQ + IMAGE + SEO VERSION
+======================================================
+Flow 2 : Google News RSS  — 10 articles per topic
+Flow 3 : Web Scraping     — 10 articles per site
+Extras : Featured Image keyword + SEO focus keyword
 """
 
 import os
@@ -204,14 +205,14 @@ def fetch_scraped_articles():
     return articles
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ AI REWRITE
+# GROQ AI REWRITE — WITH IMAGE + SEO
 # ─────────────────────────────────────────────────────────────────────────────
 
 def rewrite_with_groq(title, summary, category, source):
     if not GROQ_API_KEY:
         return None
 
-    prompt = f"""You are a pop culture news writer for AffanMarvel.
+    prompt = f"""You are a pop culture news writer and SEO expert for AffanMarvel.
 
 Write a NEWS BLOG POST:
 Title    : {title}
@@ -225,8 +226,13 @@ RULES:
 4. Do NOT mention source website.
 5. End paragraph 3 with a reader question.
 
+Also provide:
+- seo_keyword: ONE main keyword phrase (3-5 words) people would Google to find this article
+- seo_description: A compelling meta description 140-155 characters for Google
+- image_keyword: 2-3 words to search for a relevant image (e.g. "spider-man marvel", "dragon ball anime", "batman dc comics")
+
 Return ONLY this JSON (no markdown, no backticks):
-{{"title":"new title","content":"<p>para1</p><p>para2</p><p>para3</p>","excerpt":"one sentence max 25 words","tags":["tag1","tag2","tag3","tag4","tag5"]}}"""
+{{"title":"new title","content":"<p>para1</p><p>para2</p><p>para3</p>","excerpt":"one sentence max 25 words","tags":["tag1","tag2","tag3","tag4","tag5"],"seo_keyword":"main seo keyword here","seo_description":"meta description 140-155 chars","image_keyword":"image search words"}}"""
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -236,7 +242,7 @@ Return ONLY this JSON (no markdown, no backticks):
         "model":       "llama-3.1-8b-instant",
         "messages":    [{"role": "user", "content": prompt}],
         "temperature": 0.7,
-        "max_tokens":  700,
+        "max_tokens":  900,
     }
 
     for attempt in range(3):
@@ -263,6 +269,13 @@ Return ONLY this JSON (no markdown, no backticks):
             for key in ("title", "content", "excerpt", "tags"):
                 if key not in data:
                     raise ValueError(f"Missing key: {key}")
+            # Defaults for optional fields
+            if "seo_keyword" not in data:
+                data["seo_keyword"] = data["tags"][0] if data.get("tags") else title[:50]
+            if "seo_description" not in data:
+                data["seo_description"] = data.get("excerpt", "")[:155]
+            if "image_keyword" not in data:
+                data["image_keyword"] = category.lower()
             return data
 
         except json.JSONDecodeError as e:
@@ -314,7 +327,6 @@ def main():
 
     if not to_process:
         print("😴 No new articles. Exiting.")
-        # Write empty articles file
         with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             json.dump({"generated_at": str(datetime.now()), "articles": []}, f)
         return
@@ -340,15 +352,20 @@ def main():
             time.sleep(3)
             continue
 
-        print(f"  ✓ New title: {rewritten['title'][:65]}")
+        print(f"  ✓ Title    : {rewritten['title'][:60]}")
+        print(f"  ✓ SEO Key  : {rewritten.get('seo_keyword','')}")
+        print(f"  ✓ Image    : {rewritten.get('image_keyword','')}")
 
         results.append({
-            "title":      rewritten["title"],
-            "content":    rewritten["content"],
-            "excerpt":    rewritten["excerpt"],
-            "tags":       rewritten.get("tags", []),
-            "category":   category,
-            "source_url": article["url"],
+            "title":           rewritten["title"],
+            "content":         rewritten["content"],
+            "excerpt":         rewritten["excerpt"],
+            "tags":            rewritten.get("tags", []),
+            "category":        category,
+            "source_url":      article["url"],
+            "seo_keyword":     rewritten.get("seo_keyword", ""),
+            "seo_description": rewritten.get("seo_description", ""),
+            "image_keyword":   rewritten.get("image_keyword", category.lower()),
         })
 
         save_posted_url(article["url"])
@@ -356,7 +373,6 @@ def main():
         if i < len(to_process):
             time.sleep(3)
 
-    # Save articles.json for WordPress plugin to import
     output = {
         "generated_at": str(datetime.now()),
         "count":        len(results),
@@ -367,8 +383,8 @@ def main():
 
     print(f"\n✅ Saved {len(results)} articles to {OUTPUT_FILE}")
     print("=" * 60)
-    print(f"  Articles ready   : {len(results)}")
-    print(f"  Now go to WP Admin → AffanMarvel Importer → Import!")
+    print(f"  Articles ready : {len(results)}")
+    print(f"  Go to WP Admin → AM Importer → Import!")
     print("=" * 60 + "\n")
 
 
