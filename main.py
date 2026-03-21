@@ -28,7 +28,7 @@ WP_APP_PASSWORD = os.environ.get("WP_APP_PASSWORD", "")
 
 POSTED_FILE          = "posted_urls.txt"
 ARTICLES_PER_SOURCE  = 5    # How many articles to pull from each source
-MAX_TO_REWRITE       = 15   # Max articles sent to Gemini per run (free limit safe)
+MAX_TO_REWRITE       = 5   # Max articles sent to Gemini per run (free limit safe)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. FLOW 1 — RSS FEEDS  (10 sites × 5 = 50 raw articles)
@@ -600,8 +600,8 @@ def main():
 
         # Delay between Gemini calls to respect free tier rate limits
         if i < len(to_process):
-            print("  ⏳ Waiting 5s before next article...")
-            time.sleep(5)
+            print("  ⏳ Waiting 15 before next article...")
+            time.sleep(15)
 
     # ── SUMMARY ───────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
