@@ -1,9 +1,8 @@
 """
-AffanMarvel Auto-Poster — GROQ + XML-RPC VERSION
-==================================================
-Uses XML-RPC to post to WordPress (works on InfinityFree!)
-Flow 2 : Google News RSS  — 10 articles per topic
-Flow 3 : Web Scraping     — 10 articles per site
+AffanMarvel Auto-Poster — SAVE TO JSON VERSION
+================================================
+Saves rewritten articles to articles.json in the repo.
+WordPress plugin then pulls and imports them as drafts.
 """
 
 import os
@@ -13,23 +12,16 @@ import time
 import difflib
 import requests
 import feedparser
-import xmlrpc.client
-import urllib3
 from datetime import datetime
 from bs4 import BeautifulSoup
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
-GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
-WP_URL          = os.environ.get("WP_URL", "").rstrip("/")
-WP_USERNAME     = os.environ.get("WP_USERNAME", "")
-WP_APP_PASSWORD = os.environ.get("WP_APP_PASSWORD", "")
-
-POSTED_FILE         = "posted_urls.txt"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+POSTED_FILE  = "posted_urls.txt"
+OUTPUT_FILE  = "articles.json"
 ARTICLES_PER_SOURCE = 10
 MAX_TO_REWRITE      = 20
 
@@ -79,17 +71,17 @@ SCRAPE_HEADERS = {
 CATEGORY_KEYWORDS = {
     "Marvel":  ["marvel", "avengers", "iron man", "captain america", "thor",
                  "spider-man", "wolverine", "x-men", "mcu", "deadpool",
-                 "black panther", "guardians", "loki", "wanda", "hawkeye"],
+                 "black panther", "guardians", "loki", "wanda"],
     "DC":      ["dc comics", "dc universe", "batman", "superman", "wonder woman",
-                 "flash", "aquaman", "joker", "justice league", "green lantern",
-                 "black adam", "shazam", "dcu", "james gunn", "supergirl"],
+                 "flash", "aquaman", "joker", "justice league", "supergirl",
+                 "black adam", "shazam", "dcu", "james gunn"],
     "Anime":   ["anime", "manga", "demon slayer", "jujutsu", "naruto", "one piece",
                  "attack on titan", "dragon ball", "bleach", "my hero academia",
-                 "chainsaw man", "isekai", "shonen", "seinen", "crunchyroll"],
+                 "chainsaw man", "isekai", "crunchyroll"],
     "Movies":  ["movie", "film", "trailer", "box office", "cinema", "release date",
                  "director", "cast", "sequel", "prequel", "reboot"],
-    "Comics":  ["comic", "issue", "graphic novel", "variant", "run", "arc",
-                 "writer", "artist", "publisher", "image comics", "dark horse"],
+    "Comics":  ["comic", "issue", "graphic novel", "variant", "writer",
+                 "artist", "publisher", "image comics", "dark horse"],
 }
 
 def detect_category(title, summary=""):
@@ -180,9 +172,7 @@ def fetch_scraped_articles():
         source = target["source"]
         try:
             print(f"  [Scrape] {source} ...")
-            resp = requests.get(
-                target["url"], headers=SCRAPE_HEADERS, timeout=20
-            )
+            resp = requests.get(target["url"], headers=SCRAPE_HEADERS, timeout=20)
             resp.raise_for_status()
             soup  = BeautifulSoup(resp.text, "html.parser")
             tags  = soup.select(target["item_sel"])
@@ -219,24 +209,23 @@ def fetch_scraped_articles():
 
 def rewrite_with_groq(title, summary, category, source):
     if not GROQ_API_KEY:
-        print("  ⚠ GROQ_API_KEY not set")
         return None
 
     prompt = f"""You are a pop culture news writer for AffanMarvel.
 
-Write a NEWS BLOG POST based on:
+Write a NEWS BLOG POST:
 Title    : {title}
 Category : {category}
 Summary  : {summary if summary else "Write from title only."}
 
 RULES:
-1. New catchy title — do NOT copy the original.
-2. Exactly 3 paragraphs wrapped in <p> tags.
+1. New catchy title — do NOT copy original.
+2. Exactly 3 paragraphs in <p> tags.
 3. 200-280 words total.
 4. Do NOT mention source website.
 5. End paragraph 3 with a reader question.
 
-Return ONLY this JSON (no markdown, no backticks, no extra text):
+Return ONLY this JSON (no markdown, no backticks):
 {{"title":"new title","content":"<p>para1</p><p>para2</p><p>para3</p>","excerpt":"one sentence max 25 words","tags":["tag1","tag2","tag3","tag4","tag5"]}}"""
 
     headers = {
@@ -247,7 +236,7 @@ Return ONLY this JSON (no markdown, no backticks, no extra text):
         "model":       "llama-3.1-8b-instant",
         "messages":    [{"role": "user", "content": prompt}],
         "temperature": 0.7,
-        "max_tokens":  800,
+        "max_tokens":  700,
     }
 
     for attempt in range(3):
@@ -259,9 +248,8 @@ Return ONLY this JSON (no markdown, no backticks, no extra text):
                 timeout=30,
             )
             if resp.status_code == 429:
-                wait_time = 30 * (attempt + 1)
-                print(f"  ⏳ Rate limited — waiting {wait_time}s...")
-                time.sleep(wait_time)
+                print(f"  ⏳ Rate limited — waiting 30s...")
+                time.sleep(30)
                 continue
 
             resp.raise_for_status()
@@ -270,8 +258,7 @@ Return ONLY this JSON (no markdown, no backticks, no extra text):
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
                 raw = match.group(0)
-            # Remove control characters
-            raw = re.sub(r'[\x00-\x1f\x7f]', ' ', raw)
+            raw  = re.sub(r'[\x00-\x1f\x7f]', ' ', raw)
             data = json.loads(raw)
             for key in ("title", "content", "excerpt", "tags"):
                 if key not in data:
@@ -293,128 +280,54 @@ Return ONLY this JSON (no markdown, no backticks, no extra text):
     return None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WORDPRESS XML-RPC (works on InfinityFree!)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def post_to_wordpress_xmlrpc(title, content, excerpt, category, tags):
-    """Post to WordPress using XML-RPC — bypasses InfinityFree REST API blocks."""
-    xmlrpc_url = f"{WP_URL}/xmlrpc.php"
-
-    # Build post data
-    post_data = {
-        "post_title":   title,
-        "post_content": content,
-        "post_excerpt": excerpt,
-        "post_status":  "draft",
-        "terms_names": {
-            "category": [category],
-            "post_tag": tags,
-        },
-    }
-
-    try:
-        # Use transport that ignores SSL issues
-        transport = xmlrpc.client.SafeTransport()
-
-        # Create server connection
-        server = xmlrpc.client.ServerProxy(
-            xmlrpc_url,
-            transport=transport,
-            allow_none=True,
-        )
-
-        # Post using WordPress XML-RPC API
-        post_id = server.wp.newPost(
-            0,                  # blog_id (always 0)
-            WP_USERNAME,
-            WP_APP_PASSWORD,
-            post_data,
-        )
-
-        post_url = f"{WP_URL}/?p={post_id}"
-        print(f"  ✓ Draft created via XML-RPC → ID {post_id} | {post_url}")
-        return str(post_id)
-
-    except Exception as e:
-        print(f"  ✗ XML-RPC error: {e}")
-        # Try fallback with http instead of https
-        try:
-            http_url = xmlrpc_url.replace("https://", "http://")
-            server2  = xmlrpc.client.ServerProxy(http_url, allow_none=True)
-            post_id  = server2.wp.newPost(
-                0,
-                WP_USERNAME,
-                WP_APP_PASSWORD,
-                post_data,
-            )
-            print(f"  ✓ Draft created via XML-RPC (http) → ID {post_id}")
-            return str(post_id)
-        except Exception as e2:
-            print(f"  ✗ XML-RPC fallback error: {e2}")
-            return None
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VALIDATE CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
-
-def validate_config():
-    missing = []
-    if not GROQ_API_KEY:    missing.append("GROQ_API_KEY")
-    if not WP_URL:          missing.append("WP_URL")
-    if not WP_USERNAME:     missing.append("WP_USERNAME")
-    if not WP_APP_PASSWORD: missing.append("WP_APP_PASSWORD")
-    if missing:
-        raise EnvironmentError(f"Missing GitHub Secrets: {', '.join(missing)}")
-
-# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     print("\n" + "=" * 60)
-    print(f"  AffanMarvel Auto-Poster (Groq+XMLRPC) — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  AffanMarvel Auto-Poster — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    validate_config()
+    if not GROQ_API_KEY:
+        raise EnvironmentError("Missing GROQ_API_KEY secret!")
+
     posted_urls = load_posted_urls()
     print(f"\n📋 Already posted: {len(posted_urls)} URLs tracked\n")
 
     all_raw = []
 
-    print("━━━ FLOW 2: GOOGLE NEWS (10 per topic) ━━━━━━━━━━━")
+    print("━━━ FLOW 2: GOOGLE NEWS ━━━━━━━━━━━━━━━━━━━━━━━━━")
     gn = fetch_google_news_articles()
-    print(f"  Subtotal: {len(gn)} articles\n")
+    print(f"  Subtotal: {len(gn)}\n")
     all_raw.extend(gn)
 
-    print("━━━ FLOW 3: WEB SCRAPING (10 per site) ━━━━━━━━━━━")
+    print("━━━ FLOW 3: WEB SCRAPING ━━━━━━━━━━━━━━━━━━━━━━━━")
     sc = fetch_scraped_articles()
-    print(f"  Subtotal: {len(sc)} articles\n")
+    print(f"  Subtotal: {len(sc)}\n")
     all_raw.extend(sc)
 
-    print(f"📦 Total raw collected : {len(all_raw)}")
+    print(f"📦 Total raw       : {len(all_raw)}")
+    unique     = deduplicate_articles(all_raw, posted_urls)
+    print(f"✅ After dedup     : {len(unique)}")
+    to_process = unique[:MAX_TO_REWRITE]
+    print(f"🚀 Processing      : {len(to_process)}\n")
 
-    unique = deduplicate_articles(all_raw, posted_urls)
-    print(f"✅ After deduplication : {len(unique)} unique articles")
-
-    if not unique:
-        print("\n😴 No new articles found. All caught up!\n")
+    if not to_process:
+        print("😴 No new articles. Exiting.")
+        # Write empty articles file
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"generated_at": str(datetime.now()), "articles": []}, f)
         return
 
-    to_process = unique[:MAX_TO_REWRITE]
-    print(f"🚀 Processing         : {len(to_process)} articles this run\n")
-
-    success_count = 0
-    fail_count    = 0
+    results = []
 
     for i, article in enumerate(to_process, 1):
-        print(f"─── Article {i}/{len(to_process)} ─────────────────────────────")
-        print(f"  Title  : {article['title'][:80]}")
-        print(f"  Source : {article['source']} [{article['flow']}]")
-
+        print(f"─── Article {i}/{len(to_process)} ───────────────────────────")
+        print(f"  Title  : {article['title'][:75]}")
         category = detect_category(article["title"], article.get("summary", ""))
         print(f"  Category: {category}")
+        print("  ✍  Rewriting with Groq...")
 
-        print("  ✍  Rewriting with Groq AI...")
         rewritten = rewrite_with_groq(
             title    = article["title"],
             summary  = article.get("summary", ""),
@@ -423,37 +336,39 @@ def main():
         )
 
         if rewritten is None:
-            print("  ✗ Skipping — Groq rewrite failed")
-            fail_count += 1
+            print("  ✗ Skipping")
             time.sleep(3)
             continue
 
-        print(f"  New title: {rewritten['title'][:70]}")
-        print("  📤 Posting to WordPress as DRAFT (XML-RPC)...")
+        print(f"  ✓ New title: {rewritten['title'][:65]}")
 
-        result = post_to_wordpress_xmlrpc(
-            title    = rewritten["title"],
-            content  = rewritten["content"],
-            excerpt  = rewritten["excerpt"],
-            category = category,
-            tags     = rewritten.get("tags", []),
-        )
+        results.append({
+            "title":      rewritten["title"],
+            "content":    rewritten["content"],
+            "excerpt":    rewritten["excerpt"],
+            "tags":       rewritten.get("tags", []),
+            "category":   category,
+            "source_url": article["url"],
+        })
 
-        if result:
-            save_posted_url(article["url"])
-            success_count += 1
-        else:
-            fail_count += 1
+        save_posted_url(article["url"])
 
         if i < len(to_process):
-            print("  ⏳ Waiting 3s...")
             time.sleep(3)
 
-    print("\n" + "=" * 60)
-    print(f"  ✅ Run complete!")
-    print(f"  Published as draft : {success_count}")
-    print(f"  Failed / skipped   : {fail_count}")
-    print(f"  Check WordPress    : {WP_URL}/wp-admin/edit.php?post_status=draft")
+    # Save articles.json for WordPress plugin to import
+    output = {
+        "generated_at": str(datetime.now()),
+        "count":        len(results),
+        "articles":     results,
+    }
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    print(f"\n✅ Saved {len(results)} articles to {OUTPUT_FILE}")
+    print("=" * 60)
+    print(f"  Articles ready   : {len(results)}")
+    print(f"  Now go to WP Admin → AffanMarvel Importer → Import!")
     print("=" * 60 + "\n")
 
 
