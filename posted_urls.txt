@@ -1,0 +1,3 @@
+# AffanMarvel Posted URL Tracker
+# This file is updated automatically after each run.
+# DO NOT delete this file — it prevents duplicate posts.
