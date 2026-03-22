@@ -1,8 +1,7 @@
 """
-AffanMarvel Auto-Poster — RSS MEDIA IMAGE VERSION
-==================================================
-Gets REAL article images from RSS feed media tags
-No fallback logos — only real article images!
+AffanMarvel Auto-Poster — COMPLETE VERSION
+==========================================
+30+ RSS sources | Real article images | No random logos
 """
 import os, re, json, time, difflib, requests, feedparser
 from datetime import datetime
@@ -11,7 +10,7 @@ from bs4 import BeautifulSoup
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 POSTED_FILE  = "posted_urls.txt"
 OUTPUT_FILE  = "articles.json"
-ARTICLES_PER_SOURCE = 10
+ARTICLES_PER_SOURCE = 5
 MAX_TO_REWRITE = 20
 
 HEADERS = {
@@ -19,25 +18,45 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
 }
 
-# ─── RSS FEEDS ────────────────────────────────────────────────────────────────
+# ─── ALL RSS FEEDS ────────────────────────────────────────────────────────────
 
 RSS_FEEDS = [
-    {"url": "https://thedirect.com/feed",       "source": "TheDirect"},
-    {"url": "https://www.cbr.com/feed/",         "source": "CBR"},
-    {"url": "https://comicbook.com/feed/",       "source": "ComicBook"},
-    {"url": "https://screenrant.com/feed/",      "source": "ScreenRant"},
-    {"url": "https://heroichollywood.com/feed/", "source": "HeroicHollywood"},
-    {"url": "https://www.themarysue.com/feed/",  "source": "TheMARySue"},
+    # Marvel & Superhero
+    {"url": "https://thedirect.com/feed",                                      "source": "TheDirect"},
+    {"url": "https://www.cbr.com/feed/",                                       "source": "CBR"},
+    {"url": "https://heroichollywood.com/feed/",                               "source": "HeroicHollywood"},
+    {"url": "https://www.superherohype.com/feed",                              "source": "SuperheroHype"},
+    {"url": "https://wegotthiscovered.com/feed/",                              "source": "WeGotThisCovered"},
+    {"url": "https://discussingfilm.net/feed/",                                "source": "DiscussingFilm"},
+    # Movies & Entertainment
+    {"url": "https://comicbook.com/feed/",                                     "source": "ComicBook"},
+    {"url": "https://screenrant.com/feed/",                                    "source": "ScreenRant"},
+    {"url": "https://collider.com/feed/",                                      "source": "Collider"},
+    {"url": "https://movieweb.com/feed/",                                      "source": "MovieWeb"},
+    {"url": "https://deadline.com/feed/",                                      "source": "Deadline"},
+    {"url": "https://www.themarysue.com/feed/",                                "source": "TheMARySue"},
+    {"url": "https://www.polygon.com/rss/index.xml",                           "source": "Polygon"},
+    # Anime
+    {"url": "https://www.animenewsnetwork.com/all/rss.xml",                    "source": "AnimeNewsNetwork"},
+    {"url": "https://animeuknews.net/feed/",                                   "source": "AnimeUKNews"},
+    {"url": "https://crunchyroll.com/feed",                                    "source": "Crunchyroll"},
 ]
 
 # ─── CATEGORY DETECTION ───────────────────────────────────────────────────────
 
 CATEGORY_KEYWORDS = {
-    "Marvel": ["marvel","avengers","iron man","captain america","thor","spider-man","wolverine","x-men","mcu","deadpool","black panther","guardians","loki","wanda","fantastic four"],
-    "DC":     ["dc comics","dc universe","batman","superman","wonder woman","flash","aquaman","joker","justice league","supergirl","black adam","shazam","dcu","james gunn"],
-    "Anime":  ["anime","manga","demon slayer","jujutsu","naruto","one piece","attack on titan","dragon ball","bleach","my hero academia","chainsaw man","isekai","crunchyroll"],
-    "Movies": ["movie","film","trailer","box office","cinema","release date","director","cast","sequel","prequel","reboot"],
-    "Comics": ["comic","issue","graphic novel","variant","writer","artist","publisher"],
+    "Marvel":  ["marvel","avengers","iron man","captain america","thor","spider-man",
+                 "wolverine","x-men","mcu","deadpool","black panther","guardians",
+                 "loki","wanda","fantastic four","visionquest","vision","scarlet witch"],
+    "DC":      ["dc comics","dc universe","batman","superman","wonder woman","flash",
+                 "aquaman","joker","justice league","supergirl","black adam","shazam",
+                 "dcu","james gunn","the batman","penguin"],
+    "Anime":   ["anime","manga","demon slayer","jujutsu","naruto","one piece",
+                 "attack on titan","dragon ball","bleach","my hero academia",
+                 "chainsaw man","isekai","crunchyroll","shonen","seinen"],
+    "Movies":  ["movie","film","trailer","box office","cinema","release date",
+                 "director","cast","sequel","prequel","reboot","streaming"],
+    "Comics":  ["comic","issue","graphic novel","variant","writer","artist","publisher"],
 }
 
 def detect_category(title, summary=""):
@@ -46,140 +65,137 @@ def detect_category(title, summary=""):
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "Pop Culture"
 
-# ─── GET IMAGE FROM RSS ENTRY ─────────────────────────────────────────────────
+# ─── IMAGE EXTRACTION ─────────────────────────────────────────────────────────
 
-def get_image_from_rss_entry(entry):
-    """Extract real article image from RSS entry media tags."""
+SKIP_WORDS = ["logo","icon","favicon","avatar","1x1","pixel","placeholder",
+              "spinner","loading","blank","spacer","banner","ad-","advertisement"]
 
-    # Method 1: media:content (most common in news RSS feeds)
-    media_content = entry.get("media_content", [])
-    for mc in media_content:
-        url = mc.get("url", "")
-        if url and is_valid_image(url):
+def is_good_image(url):
+    """Check this is a real content image, not a logo or icon."""
+    if not url: return False
+    url_lower = url.lower()
+    if any(w in url_lower for w in SKIP_WORDS): return False
+    # Must have image extension or be from known image CDN
+    has_ext = any(ext in url_lower for ext in [".jpg",".jpeg",".png",".webp",".gif"])
+    is_cdn  = any(cdn in url_lower for cdn in ["images","media","cdn","img","photo","wp-content"])
+    return has_ext or is_cdn
+
+def get_image_from_entry(entry):
+    """Get article image from RSS entry — multiple methods."""
+
+    # Method 1: media:content (CBR, ComicBook, ScreenRant all use this)
+    for mc in entry.get("media_content", []):
+        url = mc.get("url","")
+        medium = mc.get("medium","")
+        if url and ("image" in medium or is_good_image(url)):
             return url
 
     # Method 2: media:thumbnail
-    media_thumb = entry.get("media_thumbnail", [])
-    for mt in media_thumb:
-        url = mt.get("url", "")
-        if url and is_valid_image(url):
+    for mt in entry.get("media_thumbnail", []):
+        url = mt.get("url","")
+        if url and is_good_image(url):
             return url
 
-    # Method 3: enclosures (podcasts/image RSS format)
+    # Method 3: enclosures
     for enc in entry.get("enclosures", []):
-        if "image" in enc.get("type", ""):
-            url = enc.get("href", enc.get("url", ""))
-            if url and is_valid_image(url):
-                return url
+        if "image" in enc.get("type",""):
+            url = enc.get("href", enc.get("url",""))
+            if url: return url
 
-    # Method 4: parse HTML content/summary for img tags
-    content = ""
+    # Method 4: Parse HTML in content/summary for <img> tags
+    html = ""
     if entry.get("content"):
-        content = entry["content"][0].get("value", "")
-    if not content:
-        content = entry.get("summary", "")
+        html = entry["content"][0].get("value","")
+    if not html:
+        html = entry.get("summary","")
 
-    if content:
-        soup = BeautifulSoup(content, "html.parser")
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
         for img in soup.find_all("img"):
-            src = img.get("src", "") or img.get("data-src", "")
-            if src and is_valid_image(src) and src.startswith("http"):
+            src = (img.get("src") or img.get("data-src") or
+                   img.get("data-lazy-src") or img.get("data-original",""))
+            if src and src.startswith("http") and is_good_image(src):
                 return src
 
     return ""
 
-def is_valid_image(url):
-    """Check if URL looks like a real content image (not logo/icon)."""
-    url_lower = url.lower()
-    # Must be an image file
-    if not any(ext in url_lower for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"]):
-        # Some URLs don't have extensions but are still images
-        if "image" not in url_lower and "photo" not in url_lower and "img" not in url_lower:
-            return False
-    # Skip logos, icons, avatars
-    skip_words = ["logo", "icon", "favicon", "avatar", "1x1", "pixel",
-                  "placeholder", "spinner", "loading", "blank", "spacer"]
-    if any(word in url_lower for word in skip_words):
-        return False
-    return True
-
-def scrape_og_image(url):
-    """Fetch article page and get og:image as fallback."""
+def scrape_article_og_image(url):
+    """Visit article page and get og:image as last resort."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
-        if resp.status_code != 200:
-            return ""
+        if resp.status_code != 200: return ""
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # og:image
         og = soup.find("meta", property="og:image")
         if og:
-            img = og.get("content", "").strip()
-            if img.startswith("http") and is_valid_image(img):
+            img = og.get("content","").strip()
+            if img.startswith("http") and is_good_image(img):
                 return img
 
         # twitter:image
-        tw = soup.find("meta", attrs={"name": "twitter:image"})
+        tw = soup.find("meta", attrs={"name":"twitter:image"})
         if tw:
-            img = tw.get("content", "").strip()
-            if img.startswith("http") and is_valid_image(img):
+            img = tw.get("content","").strip()
+            if img.startswith("http") and is_good_image(img):
                 return img
 
-    except Exception as e:
-        print(f"  ⚠ og:image error: {e}")
+    except: pass
     return ""
 
 # ─── DEDUPLICATION ────────────────────────────────────────────────────────────
 
 def load_posted_urls():
     if not os.path.exists(POSTED_FILE): return set()
-    with open(POSTED_FILE, "r", encoding="utf-8") as f:
+    with open(POSTED_FILE,"r",encoding="utf-8") as f:
         return set(l.strip() for l in f if l.strip() and not l.startswith("#"))
 
 def save_posted_url(url):
-    with open(POSTED_FILE, "a", encoding="utf-8") as f:
-        f.write(url.strip() + "\n")
+    with open(POSTED_FILE,"a",encoding="utf-8") as f:
+        f.write(url.strip()+"\n")
 
-def titles_are_similar(t1, t2, threshold=0.72):
-    return difflib.SequenceMatcher(None, t1.lower(), t2.lower()).ratio() >= threshold
+def titles_are_similar(t1,t2,threshold=0.72):
+    return difflib.SequenceMatcher(None,t1.lower(),t2.lower()).ratio()>=threshold
 
 def deduplicate(articles, posted_urls):
     seen, unique = [], []
     for art in articles:
-        url, title = art.get("url","").strip(), art.get("title","").strip()
+        url,title = art.get("url","").strip(), art.get("title","").strip()
         if not url or not title or url in posted_urls: continue
-        if any(titles_are_similar(title, t) for t in seen): continue
+        if any(titles_are_similar(title,t) for t in seen): continue
         unique.append(art); seen.append(title)
     return unique
 
-# ─── FETCH RSS + IMAGES ───────────────────────────────────────────────────────
+# ─── FETCH RSS ────────────────────────────────────────────────────────────────
 
-def fetch_rss():
+def fetch_all_rss():
     articles = []
     for fi in RSS_FEEDS:
         try:
             print(f"  [RSS] {fi['source']} ...")
             feed  = feedparser.parse(fi["url"])
             count = 0
+            img_count = 0
             for e in feed.entries:
                 if count >= ARTICLES_PER_SOURCE: break
-                link    = e.get("link", "").strip()
-                title   = e.get("title", "").strip()
-                summary = re.sub(r"<[^>]+>", "", e.get("summary", "")).strip()
+                link    = e.get("link","").strip()
+                title   = e.get("title","").strip()
+                summary = re.sub(r"<[^>]+>","",e.get("summary","")).strip()
                 if not link or not title: continue
 
-                # Get image from RSS entry first (fastest + most accurate)
-                image_url = get_image_from_rss_entry(e)
+                # Get image directly from RSS entry
+                image_url = get_image_from_entry(e)
+                if image_url: img_count += 1
 
                 articles.append({
                     "url":       link,
                     "title":     title,
                     "summary":   summary[:500],
                     "source":    fi["source"],
-                    "image_url": image_url,  # Store immediately from RSS
+                    "image_url": image_url,
                 })
                 count += 1
-            print(f"     → {count} articles, images from RSS: {sum(1 for a in articles[-count:] if a['image_url'])}/{count}")
+            print(f"     → {count} articles | {img_count} with images")
         except Exception as e:
             print(f"     ⚠ {e}")
     return articles
@@ -198,8 +214,8 @@ Return ONLY valid JSON no markdown:
         try:
             resp = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 700},
+                headers={"Authorization":f"Bearer {GROQ_API_KEY}","Content-Type":"application/json"},
+                json={"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":prompt}],"temperature":0.7,"max_tokens":700},
                 timeout=30
             )
             if resp.status_code == 429:
@@ -207,15 +223,15 @@ Return ONLY valid JSON no markdown:
                 time.sleep(30); continue
             resp.raise_for_status()
             raw  = resp.json()["choices"][0]["message"]["content"]
-            raw  = re.sub(r"```json\s*|```", "", raw).strip()
-            m    = re.search(r"\{.*\}", raw, re.DOTALL)
+            raw  = re.sub(r"```json\s*|```","",raw).strip()
+            m    = re.search(r"\{.*\}",raw,re.DOTALL)
             if m: raw = m.group(0)
-            raw  = re.sub(r'[\x00-\x1f\x7f]', ' ', raw)
+            raw  = re.sub(r'[\x00-\x1f\x7f]',' ',raw)
             data = json.loads(raw)
-            for k in ("title", "content", "excerpt", "tags"):
+            for k in ("title","content","excerpt","tags"):
                 if k not in data: raise ValueError(f"Missing {k}")
             data.setdefault("seo_keyword", data["tags"][0] if data.get("tags") else title[:40])
-            data.setdefault("seo_description", data.get("excerpt", "")[:155])
+            data.setdefault("seo_description", data.get("excerpt","")[:155])
             return data
         except Exception as e:
             print(f"  ⚠ Groq attempt {attempt+1}: {e}")
@@ -225,7 +241,7 @@ Return ONLY valid JSON no markdown:
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    print("\n" + "="*60)
+    print("\n"+"="*60)
     print(f"  AffanMarvel — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
@@ -235,38 +251,40 @@ def main():
     posted_urls = load_posted_urls()
     print(f"\n📋 Already posted: {len(posted_urls)}\n")
 
-    print("━━━ FETCHING RSS FEEDS ━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    all_raw = fetch_rss()
+    print("━━━ FETCHING ALL RSS FEEDS ━━━━━━━━━━━━━━━━━━━━━━━")
+    all_raw    = fetch_all_rss()
     unique     = deduplicate(all_raw, posted_urls)
     to_process = unique[:MAX_TO_REWRITE]
-    print(f"\n📦 Total: {len(all_raw)} | Unique: {len(unique)} | Processing: {len(to_process)}\n")
+
+    imgs_in_rss = sum(1 for a in to_process if a.get("image_url"))
+    print(f"\n📦 Total: {len(all_raw)} | Unique: {len(unique)} | Processing: {len(to_process)}")
+    print(f"🖼 Images from RSS: {imgs_in_rss}/{len(to_process)}\n")
 
     if not to_process:
         print("😴 No new articles.")
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump({"generated_at": str(datetime.now()), "count": 0, "articles": []}, f)
+        with open(OUTPUT_FILE,"w",encoding="utf-8") as f:
+            json.dump({"generated_at":str(datetime.now()),"count":0,"articles":[]},f)
         return
 
     results = []
     for i, art in enumerate(to_process, 1):
         print(f"─── {i}/{len(to_process)}: {art['title'][:70]}")
-        category = detect_category(art["title"], art.get("summary", ""))
+        category  = detect_category(art["title"], art.get("summary",""))
         print(f"  Category : {category}")
 
-        # Use image from RSS if found, else try scraping og:image
-        image_url = art.get("image_url", "")
-        if image_url:
-            print(f"  ✓ Image from RSS: {image_url[:60]}")
-        else:
-            print(f"  🔍 No RSS image — scraping og:image...")
-            image_url = scrape_og_image(art["url"])
+        image_url = art.get("image_url","")
+
+        # If RSS had no image, try scraping og:image from the article page
+        if not image_url:
+            print(f"  🔍 RSS had no image — scraping article page...")
+            image_url = scrape_article_og_image(art["url"])
             if image_url:
-                print(f"  ✓ og:image found: {image_url[:60]}")
+                print(f"  ✓ Found og:image!")
             else:
-                print(f"  ⚠ No image found for this article")
+                print(f"  ⚠ No image found — post will have no image")
 
         print(f"  ✍ Rewriting...")
-        rewritten = rewrite_with_groq(art["title"], art.get("summary", ""), category)
+        rewritten = rewrite_with_groq(art["title"], art.get("summary",""), category)
         if not rewritten:
             print("  ✗ Skipped")
             time.sleep(3)
@@ -278,25 +296,27 @@ def main():
             "title":           rewritten["title"],
             "content":         rewritten["content"],
             "excerpt":         rewritten["excerpt"],
-            "tags":            rewritten.get("tags", []),
+            "tags":            rewritten.get("tags",[]),
             "category":        category,
             "source_url":      art["url"],
             "image_url":       image_url,
-            "seo_keyword":     rewritten.get("seo_keyword", ""),
-            "seo_description": rewritten.get("seo_description", ""),
+            "seo_keyword":     rewritten.get("seo_keyword",""),
+            "seo_description": rewritten.get("seo_description",""),
         })
         save_posted_url(art["url"])
         if i < len(to_process): time.sleep(3)
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    with open(OUTPUT_FILE,"w",encoding="utf-8") as f:
         json.dump({
             "generated_at": str(datetime.now()),
             "count":        len(results),
             "articles":     results,
         }, f, ensure_ascii=False, indent=2)
 
-    print(f"\n✅ Saved {len(results)} articles with REAL images!")
-    print("="*60 + "\n")
+    with_img = sum(1 for r in results if r.get("image_url"))
+    print(f"\n✅ Saved {len(results)} articles")
+    print(f"   With real images: {with_img}/{len(results)}")
+    print("="*60+"\n")
 
 if __name__ == "__main__":
     main()
