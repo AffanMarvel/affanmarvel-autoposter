@@ -259,7 +259,7 @@ def rewrite_with_groq(title, summary, full_content, category, source):
                     "model": "llama-3.3-70b-versatile",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.75,
-                    "max_tokens": 3999
+                    "max_tokens": 3999,
                 },
                 timeout=90
             )
