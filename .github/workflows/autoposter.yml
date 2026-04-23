@@ -35,8 +35,11 @@ jobs:
 
       - name: Save articles to repo
         run: |
-          git config user.name  "affanmarvel-bot"
+          git config user.name "affanmarvel-bot"
           git config user.email "bot@affanmarvel.in"
           git add -f articles.json posted_urls.txt
-          git commit -m "chore: update articles [skip ci]" || echo "Nothing to commit"
-          git push --force origin main
+          if git commit -m "chore: update articles [skip ci]"; then
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "Nothing to commit, skipping push."
+          fi
